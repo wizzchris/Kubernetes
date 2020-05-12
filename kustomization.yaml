@@ -5,13 +5,13 @@ kind: Service
 metadata:
   name: app
 spec:
-  type: NodePort
   selector:
     app: web
   ports:
     - protocol: TCP
       port: 80
       targetPort: 3000
+  type: LoadBalancer
 ---
 apiVersion: v1
 kind: Service
@@ -27,6 +27,33 @@ spec:
   selector:
     role: mongo
 ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elst
+  labels:
+    name: elst
+spec:
+  ports:
+  - port: 9200
+    targetPort: 9200
+  clusterIP: None
+  selector:
+    elst: elst
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kibana
+spec:
+  type: NodePort
+  selector:
+    kibana: kibana
+  ports:
+    - protocol: TCP
+      port: 5601
+      targetPort: 5601
+---
 apiVersion: rbac.authorization.k8s.io/v1beta1
 kind: ClusterRoleBinding
 metadata:
@@ -41,9 +68,69 @@ subjects:
     namespace: default
 ---
 apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elst
+spec:
+  serviceName: "elst"
+  replicas: 1
+  selector:
+    matchLabels:
+      elst: elst
+  template:
+    metadata:
+      labels:
+        elst: elst
+    spec:
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: elst
+          image: elstv1:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9200
+          volumeMounts:
+            - name: elst
+              mountPath: /data/elst
+          resources:
+            requests:
+              memory: 2048Mi
+            limits:
+              memory: 2048Mi
+  volumeClaimTemplates:
+  - metadata:
+      name: elst
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 100Gi
+---
+apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: v2-app
+  name: kibana
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+     kibana: kibana
+  template:
+    metadata:
+      labels:
+        kibana: kibana
+    spec:
+      containers:
+        - name: kibana
+          image: kibanav1:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5601
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: v3-app
 spec:
   replicas: 3
   selector:
@@ -81,7 +168,8 @@ spec:
       terminationGracePeriodSeconds: 10
       containers:
         - name: mongo
-          image: mongo
+          image: dbv1:latest
+          imagePullPolicy: IfNotPresent
           command:
             - mongod
             - "--replSet"
@@ -119,3 +207,8 @@ spec:
         backend:
           serviceName: app
           servicePort: 80
+      - path: /
+        pathType: Prefix
+        backend:
+          serviceName: kibana
+          servicePort: 5601
